@@ -1,0 +1,119 @@
+########Script_Correlation and Hypergeometric_law ################
+######### Depending on the dataset this script will take a long time and will need to be run on a cluster
+library(Seurat)
+
+#Load Seurat object
+load("AuxinPurif5000VST06_NewTE_Aug2022scTE_NewTE_Aug2022scTE.RData")
+OBJ <- AuxinPurif5000VST06_NewTE_Aug2022scTE
+
+OBJ <- NormalizeData(OBJ, assay = 'RNA')
+DefaultAssay(OBJ) <- 'RNA'
+
+# to focuss on one condition ie Ctr the object is splited
+Split_OBJ <- SplitObject(OBJ, split.by = 'orig.ident2')
+SplitNames <- names(Split_OBJ)
+TotalGenes <- rownames(GetAssayData(object = OBJ, slot = "data",assay = 'RNA'))
+
+#Load list of gene you want to test the correlation against any other detected genes
+# The file can be just a list with the gene ID
+
+TF <- read.csv("ARF_list.csv", header = T)
+TF <- as.character(TF)
+
+Hyp <- data.frame(matrix(NA, ncol = length(TF), nrow = length(TotalGenes)))
+correlation <- data.frame(matrix(NA,ncol = length(TF), nrow = length(TotalGenes)))
+HypRandomPvalue <- data.frame(matrix(NA,ncol = length(TF), nrow = length(TotalGenes)))
+correlationPvalueRand <- data.frame(matrix(NA,ncol = length(TF), nrow = length(TotalGenes)))
+
+
+HypFinal <- list()
+HypRandomPvalueFinal <- list()
+CorFinal <- list()
+CorRandompValueFinal<- list()
+
+
+
+
+#length(SplitNames)
+i=1
+TFnum = as.character(50)
+Cond = "ARF"
+  
+totalcells <- as.numeric(nrow(as.data.frame(Split_OBJ[[i]]@meta.data$orig.ident)))
+  TotalCellsnames <- colnames(GetAssayData(object = Split_OBJ[[i]], slot = "data",assay = 'RNA'))
+  
+
+  matrix <- Split_OBJ[[i]]@assays$RNA@data
+  matrix_mod <- as.matrix(matrix)
+  print(paste("i",i))
+  #length(TF)
+  for (k in 1:length(TF)) {
+    print(paste("k",k))
+    TFpresent <- TotalGenes[TotalGenes %in% TF[k]]
+    if (length(TFpresent) == 1 ) {
+      mturquoise <- GetAssayData(object = Split_OBJ[[i]], slot = "data")[TF[k],][GetAssayData(object = Split_OBJ[[i]], slot = "data")[TF[k],] > 0]
+      quantTF <- quantile(mturquoise, 0.05)
+      mturquoise <- mturquoise[mturquoise > quantTF ]
+      if (length(mturquoise) > 10 ) {
+        #########test hypergeometric ############
+        #length(TotalGenes)
+        for (j in 1:length(TotalGenes)) {
+          gene <- GetAssayData(object = Split_OBJ[[i]], slot = "data")[TotalGenes[j],][GetAssayData(object = Split_OBJ[[i]], slot = "data")[TotalGenes[j],] > 0]
+          mturquoise2 <- as.data.frame(mturquoise)
+          gene2 <- as.data.frame(gene)
+          overlap <- intersect(rownames(mturquoise2) , rownames(gene2))
+          
+          ############## only test if we have enough cells expressing the TE 10 and if there are at least a few cells coexpressing TF and TE
+          if (length(gene) > 0 & length(overlap) > 0 ) {
+            mturquoisenum <- as.numeric(length(mturquoise))
+          genenum <- as.numeric(length(gene))
+          overlapnum <- as.numeric(length(overlap))
+          Hyp[j,k] <- abs(phyper(overlapnum ,genenum, totalcells-genenum, mturquoisenum,log = FALSE, lower.tail = T)-1)
+          #####Adding randomization
+          set.seed(i*k*j)
+          HypRand <- list()
+          
+          for (l in 1:1000) {
+            gene2 <- sample(TotalCellsnames, length(gene))
+            overlap <- as.numeric(length(intersect(rownames(mturquoise2) , gene2)))
+            HypRand[[l]]<- abs(phyper(overlap ,genenum, totalcells-genenum, mturquoisenum,log = FALSE, lower.tail = T)-1)
+          }
+          random <- unlist(HypRand)
+          exceed_count <- length(Hyp[j,k][Hyp[j,k] >= random] )
+          HypRandomPvalue[j,k] <- exceed_count / 1000
+        } else {
+          HypRandomPvalue[j,k] <- 'NS'
+          Hyp[j,k] <- "N_over"
+        }
+      }
+        ############ Correlation test ###########
+        gene<-as.numeric(matrix_mod[TF[k],])
+        correlations<-apply(matrix_mod,1,function(x){cor(gene,x)})
+        cordf <- as.data.frame(correlations)
+        cordf$geneID <- rownames(cordf)
+        correlation[,k] <- cordf$correlations
+        correlationrand <- list()
+        for (l in 1:1000) {
+          gene <- sample(gene)
+          correlationrand[[l]]<-apply(matrix_mod,1,function(x){cor(gene,x)})
+        }
+        random <- do.call(cbind, correlationrand)
+        RandomPvalue <- list()
+        for (l in 1:length(TotalGenes)) {
+          exceed_count <- length(correlation[l,k][random[l,] >= correlation[l,k]])
+          RandomPvalue[[l]] <- exceed_count / 1000
+        }
+        RandomPvalue <- unlist(RandomPvalue)
+        correlationPvalueRand[,k] <- RandomPvalue
+      } else {
+      }
+    }
+  }
+  
+save(Hyp, file = paste("Ath_Ctr_Aux_HypFinal",TFnum,Cond,".RData", sep = "_"))
+save(HypRandomPvalue, file = paste("Ath_Ctr_Aux_HypRandomPvalueFinal",TFnum,Cond,".RData", sep = "_"))
+save(correlation, file = paste("Ath_Ctr_Aux_CorFinal",TFnum,Cond,".RData", sep = "_"))
+save(correlationPvalueRand, file = paste("Ath_Ctr_Aux_CorRandompValueFinal",TFnum,Cond,".RData", sep = "_"))
+
+
+
